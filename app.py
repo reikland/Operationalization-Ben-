@@ -25,8 +25,9 @@ def clean_indents(s: str) -> str:
     return textwrap.dedent(s).strip()
 
 
-QUESTION_EXAMPLES_PATH = Path(
-    "forecasting_tools/agents_and_tools/question_generators/q3_q4_quarterly_questions.json"
+QUESTION_EXAMPLES_PATH = (
+    Path(__file__).parent
+    / "forecasting_tools/agents_and_tools/question_generators/q3_q4_quarterly_questions.json"
 )
 
 
@@ -70,6 +71,12 @@ def ensure_question_examples_file() -> Path:
             json.dumps(fallback_examples, indent=2), encoding="utf-8"
         )
         return QUESTION_EXAMPLES_PATH
+
+
+# Make sure the quarterly question examples are available before any downstream
+# imports try to read them. This protects against environments where
+# ``forecasting_tools`` is installed without bundled data files.
+ensure_question_examples_file()
 
 
 # -----------------------------
