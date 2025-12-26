@@ -1,8 +1,0 @@
-[
-  {
-    "question_text": "Will the fallback example file load correctly?",
-    "resolution_criteria": "The app reads the local JSON without errors.",
-    "resolution_date": "2024-12-31",
-    "extra_context": "Local stub provided when upstream data is unavailable."
-  }
-]
