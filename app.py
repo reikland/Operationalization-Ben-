@@ -25,10 +25,7 @@ def clean_indents(s: str) -> str:
     return textwrap.dedent(s).strip()
 
 
-QUESTION_EXAMPLES_PATH = (
-    Path(__file__).parent
-    / "forecasting_tools/agents_and_tools/question_generators/q3_q4_quarterly_questions.json"
-)
+QUESTION_EXAMPLES_PATH = Path.cwd() / "forecasting_tools/agents_and_tools/question_generators/q3_q4_quarterly_questions.json"
 
 
 def ensure_question_examples_file() -> Path:
