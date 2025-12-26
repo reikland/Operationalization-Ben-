@@ -4,83 +4,82 @@ import os
 import re
 import textwrap
 from pathlib import Path
-import os
-import re
-import textwrap
 from typing import Any, Dict, List
 
 import pandas as pd
 import streamlit as st
 
-from forecasting_tools.agents_and_tools.question_generators.question_decomposer import (
+# =============================================================================
+# 0) Avoid shadowing installed package:
+#    - Put the "relative file expected upstream" into a cache directory
+#    - chdir into that cache directory so the relative open() works
+# =============================================================================
+
+APP_DIR = Path(__file__).resolve().parent
+
+mac_cache_root = Path.home() / "Library" / "Caches"
+cache_root = mac_cache_root if mac_cache_root.exists() else (Path.home() / ".cache")
+CACHE_DIR = cache_root / "forecasting-tools-streamlit-app"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+os.chdir(CACHE_DIR)
+
+EXAMPLES_REL = Path(
+    "forecasting_tools/agents_and_tools/question_generators/q3_q4_quarterly_questions.json"
+)
+EXAMPLES_PATH = Path.cwd() / EXAMPLES_REL
+
+
+def ensure_question_examples_file() -> Path:
+    if EXAMPLES_PATH.exists():
+        return EXAMPLES_PATH
+
+    EXAMPLES_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        import importlib.resources as resources
+
+        pkg_file = (
+            resources.files("forecasting_tools.agents_and_tools.question_generators")
+            .joinpath(EXAMPLES_REL.name)
+        )
+        EXAMPLES_PATH.write_text(pkg_file.read_text(encoding="utf-8"), encoding="utf-8")
+        return EXAMPLES_PATH
+    except Exception:
+        fallback_examples = [
+            {
+                "question_text": "Will the fallback example file load correctly?",
+                "resolution_criteria": "The app reads the local JSON without errors.",
+                "resolution_date": "2026-12-31",
+                "extra_context": "Local stub provided when upstream data is unavailable.",
+            }
+        ]
+        EXAMPLES_PATH.write_text(json.dumps(fallback_examples, indent=2), encoding="utf-8")
+        return EXAMPLES_PATH
+
+
+ensure_question_examples_file()
+
+# =============================================================================
+# 1) Import forecasting_tools after patching examples file
+# =============================================================================
+from forecasting_tools.agents_and_tools.question_generators.question_decomposer import (  # noqa: E402
     DecompositionResult,
     QuestionDecomposer,
 )
-from forecasting_tools.agents_and_tools.question_generators.question_operationalizer import (
+from forecasting_tools.agents_and_tools.question_generators.question_operationalizer import (  # noqa: E402
     QuestionOperationalizer,
 )
+
+# =============================================================================
+# Helpers
+# =============================================================================
 
 
 def clean_indents(s: str) -> str:
     return textwrap.dedent(s).strip()
 
 
-QUESTION_EXAMPLES_PATH = Path.cwd() / "forecasting_tools/agents_and_tools/question_generators/q3_q4_quarterly_questions.json"
-
-
-def ensure_question_examples_file() -> Path:
-    """Ensure the operationalizer's example JSON file exists locally.
-
-    The upstream package expects to read ``q3_q4_quarterly_questions.json`` from a
-    relative path. When the package is installed without bundled data files, this
-    fails. We try to copy the file from the installed package; if that is not
-    available (e.g., minimal installation), we fall back to a small, local sample
-    so the app can still start.
-    """
-
-    if QUESTION_EXAMPLES_PATH.exists():
-        return QUESTION_EXAMPLES_PATH
-
-    QUESTION_EXAMPLES_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-    try:
-        import importlib.resources as resources
-
-        package_resource = resources.files(
-            "forecasting_tools.agents_and_tools.question_generators"
-        ).joinpath(QUESTION_EXAMPLES_PATH.name)
-        with package_resource.open("r", encoding="utf-8") as src:
-            QUESTION_EXAMPLES_PATH.write_text(src.read(), encoding="utf-8")
-            return QUESTION_EXAMPLES_PATH
-    except Exception:
-        # Fallback minimal content to keep the operationalizer working even when
-        # the upstream data file is missing. The structure mirrors the expected
-        # list-of-dicts shape used by DataOrganizer.
-        fallback_examples = [
-            {
-                "question_text": "Will the fallback example file load correctly?",
-                "resolution_criteria": "The app reads the local JSON without errors.",
-                "resolution_date": "2024-12-31",
-                "extra_context": "Local stub provided when upstream data is unavailable.",
-            }
-        ]
-        QUESTION_EXAMPLES_PATH.write_text(
-            json.dumps(fallback_examples, indent=2), encoding="utf-8"
-        )
-        return QUESTION_EXAMPLES_PATH
-
-
-# Make sure the quarterly question examples are available before any downstream
-# imports try to read them. This protects against environments where
-# ``forecasting_tools`` is installed without bundled data files.
-ensure_question_examples_file()
-
-
-# -----------------------------
-# Async helper
-# -----------------------------
 def run_async(coro):
-    """Run an async coroutine from Streamlit safely."""
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
@@ -94,9 +93,6 @@ def run_async(coro):
         return asyncio.run(coro)
 
 
-# -----------------------------
-# Topic parsing helpers
-# -----------------------------
 _SPLIT_RE = re.compile(r"[;\n,\|]+")
 
 
@@ -113,8 +109,6 @@ def parse_topics_cell(x: Any) -> List[str]:
             return []
         if s.startswith("[") and s.endswith("]"):
             try:
-                import json
-
                 j = json.loads(s)
                 raw = j if isinstance(j, list) else _SPLIT_RE.split(s)
             except Exception:
@@ -140,9 +134,6 @@ def unique_preserve_order(items: List[str]) -> List[str]:
     return out
 
 
-# -----------------------------
-# Convert Pydantic objects to dict safely
-# -----------------------------
 def to_dict(obj: Any) -> Any:
     if obj is None:
         return None
@@ -152,18 +143,13 @@ def to_dict(obj: Any) -> Any:
         return [to_dict(x) for x in obj]
     if isinstance(obj, dict):
         return {k: to_dict(v) for k, v in obj.items()}
-    # pydantic v2
     if hasattr(obj, "model_dump") and callable(getattr(obj, "model_dump")):
         return to_dict(obj.model_dump())
-    # pydantic v1
     if hasattr(obj, "dict") and callable(getattr(obj, "dict")):
         return to_dict(obj.dict())
     return str(obj)
 
 
-# -----------------------------
-# Build research pack for operationalizer
-# -----------------------------
 def build_related_research(decomp: DecompositionResult, q_obj: Any) -> str:
     qd = to_dict(q_obj)
     return clean_indents(
@@ -182,53 +168,40 @@ def build_related_research(decomp: DecompositionResult, q_obj: Any) -> str:
     ).strip()
 
 
-# -----------------------------
-# Env vars (robuste pour LiteLLM/OpenRouter)
-# -----------------------------
-def uses_openrouter(*models: str) -> bool:
-    return any((m or "").strip().lower().startswith("openrouter/") for m in models)
+def configure_env(provider: str, api_key: str, asknews_key: str, perplexity_key: str) -> None:
+    for k in [
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_BASE",
+        "OPENROUTER_API_KEY",
+        "OPENROUTER_BASE_URL",
+    ]:
+        os.environ.pop(k, None)
 
-
-def configure_env(
-    provider: str,
-    api_key: str,
-    decomposer_model: str,
-    operationalizer_model: str,
-    asknews_key: str,
-    perplexity_key: str,
-) -> None:
     if api_key:
-        # Certains chemins lisent OPENAI_API_KEY même si provider=openrouter
-        os.environ["OPENAI_API_KEY"] = api_key
-
-        if provider == "OpenRouter" or uses_openrouter(decomposer_model, operationalizer_model):
-            # LiteLLM (provider openrouter) attend généralement OPENROUTER_API_KEY
+        if provider == "OpenRouter":
+            base = "https://openrouter.ai/api/v1"
+            os.environ["OPENAI_API_KEY"] = api_key
             os.environ["OPENROUTER_API_KEY"] = api_key
-
-            # Optionnel mais pratique
-            os.environ["OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
-            os.environ["OPENROUTER_BASE_URL"] = "https://openrouter.ai/api/v1"
+            os.environ["OPENAI_BASE_URL"] = base
+            os.environ["OPENAI_API_BASE"] = base
+            os.environ["OPENROUTER_BASE_URL"] = base
         else:
-            os.environ.pop("OPENROUTER_API_KEY", None)
-            os.environ.pop("OPENROUTER_BASE_URL", None)
-            os.environ.pop("OPENAI_BASE_URL", None)
+            os.environ["OPENAI_API_KEY"] = api_key
 
     if asknews_key:
         os.environ["ASKNEWS_API_KEY"] = asknews_key
-
     if perplexity_key:
         os.environ["PERPLEXITY_API_KEY"] = perplexity_key
         os.environ["PPLX_API_KEY"] = perplexity_key
 
 
-# -----------------------------
+# =============================================================================
 # Streamlit UI
-# -----------------------------
-st.set_page_config(
-    page_title="Topics CSV → 20 proto-questions → operationalize",
-    layout="wide",
-)
-st.title("Topics CSV → 20 proto-questions → operationalized questions (forecasting-tools)")
+# =============================================================================
+
+st.set_page_config(page_title="Topics CSV → proto-questions → operationalize", layout="wide")
+st.title("Topics CSV → proto-questions → operationalized questions (forecasting-tools)")
 
 with st.sidebar:
     st.header("LLM provider")
@@ -248,7 +221,7 @@ with st.sidebar:
     st.divider()
     decomposer_model = st.text_input(
         "Decomposer model",
-        value="openrouter/google/gemini-2.5-pro-preview" if mode == "deep" else "openrouter/perplexity/sonar",
+        value="openrouter/perplexity/sonar" if mode == "fast" else "openrouter/google/gemini-2.5-pro-preview",
     )
     operationalizer_model = st.text_input(
         "Operationalizer model",
@@ -261,26 +234,26 @@ with st.sidebar:
         height=120,
     )
 
-# Configure env (fix for OpenRouter auth)
-configure_env(
-    provider=provider,
-    api_key=llm_api_key,
-    decomposer_model=decomposer_model,
-    operationalizer_model=operationalizer_model,
-    asknews_key=asknews_key,
-    perplexity_key=perplexity_key,
-)
+if provider == "OpenAI" and (llm_api_key or "").startswith("sk-or-"):
+    st.sidebar.error("Provider=OpenAI mais la clé ressemble à une clé OpenRouter (sk-or-v1...).")
+    st.stop()
+
+configure_env(provider, llm_api_key, asknews_key, perplexity_key)
 
 with st.sidebar:
     st.divider()
+    st.caption(f"Script dir: {APP_DIR}")
+    st.caption(f"CWD (cache): {Path.cwd()}")
+    st.caption(f"Examples JSON exists: {EXAMPLES_PATH.exists()}")
     st.caption(f"OPENROUTER_API_KEY set: {bool(os.environ.get('OPENROUTER_API_KEY'))}")
     st.caption(f"OPENAI_API_KEY set: {bool(os.environ.get('OPENAI_API_KEY'))}")
+    st.caption(f"OPENAI_API_BASE: {os.environ.get('OPENAI_API_BASE')}")
     st.caption(f"OPENAI_BASE_URL: {os.environ.get('OPENAI_BASE_URL')}")
 
-
-# -----------------------------
+# =============================================================================
 # CSV input
-# -----------------------------
+# =============================================================================
+
 uploaded = st.file_uploader("Upload CSV", type=["csv"])
 if not uploaded:
     st.info("Charge un CSV avec une colonne contenant des topics (ex: 'topics').")
@@ -316,12 +289,13 @@ if not llm_api_key:
 
 run_btn = st.button("Generate proto-questions and operationalize", type="primary")
 
-
-# -----------------------------
+# =============================================================================
 # Pipeline
-# -----------------------------
+# =============================================================================
+
+
 async def run_pipeline() -> pd.DataFrame:
-    topics_block = "\n".join([f"- {t}" for t in topics[:300]])  # guardrail
+    topics_block = "\n".join([f"- {t}" for t in topics[:300]])
     fuzzy = clean_indents(
         f"""
         Please generate forecasting proto-questions grounded in the following topics (from a CSV).
