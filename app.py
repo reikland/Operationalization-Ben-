@@ -1,4 +1,9 @@
 import asyncio
+import json
+import os
+import re
+import textwrap
+from pathlib import Path
 import os
 import re
 import textwrap
@@ -18,6 +23,53 @@ from forecasting_tools.agents_and_tools.question_generators.question_operational
 
 def clean_indents(s: str) -> str:
     return textwrap.dedent(s).strip()
+
+
+QUESTION_EXAMPLES_PATH = Path(
+    "forecasting_tools/agents_and_tools/question_generators/q3_q4_quarterly_questions.json"
+)
+
+
+def ensure_question_examples_file() -> Path:
+    """Ensure the operationalizer's example JSON file exists locally.
+
+    The upstream package expects to read ``q3_q4_quarterly_questions.json`` from a
+    relative path. When the package is installed without bundled data files, this
+    fails. We try to copy the file from the installed package; if that is not
+    available (e.g., minimal installation), we fall back to a small, local sample
+    so the app can still start.
+    """
+
+    if QUESTION_EXAMPLES_PATH.exists():
+        return QUESTION_EXAMPLES_PATH
+
+    QUESTION_EXAMPLES_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        import importlib.resources as resources
+
+        package_resource = resources.files(
+            "forecasting_tools.agents_and_tools.question_generators"
+        ).joinpath(QUESTION_EXAMPLES_PATH.name)
+        with package_resource.open("r", encoding="utf-8") as src:
+            QUESTION_EXAMPLES_PATH.write_text(src.read(), encoding="utf-8")
+            return QUESTION_EXAMPLES_PATH
+    except Exception:
+        # Fallback minimal content to keep the operationalizer working even when
+        # the upstream data file is missing. The structure mirrors the expected
+        # list-of-dicts shape used by DataOrganizer.
+        fallback_examples = [
+            {
+                "question_text": "Will the fallback example file load correctly?",
+                "resolution_criteria": "The app reads the local JSON without errors.",
+                "resolution_date": "2024-12-31",
+                "extra_context": "Local stub provided when upstream data is unavailable.",
+            }
+        ]
+        QUESTION_EXAMPLES_PATH.write_text(
+            json.dumps(fallback_examples, indent=2), encoding="utf-8"
+        )
+        return QUESTION_EXAMPLES_PATH
 
 
 # -----------------------------
@@ -294,6 +346,7 @@ async def run_pipeline() -> pd.DataFrame:
             model=decomposer_model,
         )
 
+    ensure_question_examples_file()
     operationalizer = QuestionOperationalizer(model=operationalizer_model)
 
     sem = asyncio.Semaphore(4)
